@@ -92,13 +92,13 @@ onSnapshot(stockRef, (snap) => {
 onSnapshot(query(reportsCol, orderBy('date', 'asc')), (snap) => {
   window.reports = snap.docs.map(d => ({ ...d.data(), _id: d.id }));
   renderPills();
-  if (document.getElementById('page-reports').classList.contains('active')) renderReports();
+  renderReports();
 });
 
 // Listen to docs in real-time
 onSnapshot(query(docsCol, orderBy('date', 'desc')), (snap) => {
   window.docs = snap.docs.map(d => ({ ...d.data(), _id: d.id }));
-  if (document.getElementById('page-docs').classList.contains('active')) renderDocs();
+  renderDocs();
 });
 
 // ── STOCK ACTIONS ──────────────────────────────────────────
@@ -173,7 +173,7 @@ const bpCol = collection(db, 'mummy', 'data', 'bp');
 
 onSnapshot(query(bpCol, orderBy('datetime', 'asc')), (snap) => {
   window.bpReadings = snap.docs.map(d => ({ ...d.data(), _id: d.id }));
-  if (document.getElementById('page-bp').classList.contains('active')) renderBp();
+  renderBp();
 });
 
 window.saveBpReading = function() {
@@ -660,20 +660,24 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Nunito',
     </div>
     <div class="form-group">
       <label class="form-label">Photo / Scan</label>
-      <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
+      <div class="upload-zone">
         <div style="font-size:28px">📸</div>
         <div style="font-size:13px;color:var(--text3);margin-top:6px;font-weight:600">Tap to take photo or choose from gallery</div>
         <div style="font-size:11px;color:var(--text3);margin-top:4px;font-weight:600">(JPG, PNG supported)</div>
-        <input type="file" id="fileInput" accept="image/*" capture="environment" onchange="handleFile(event)" style="position:absolute;opacity:0;width:1px;height:1px" />
+        
         <img id="uploadPreview" class="upload-preview" />
         <div id="fileNameShow" style="font-size:11px;color:var(--teal);font-weight:700;margin-top:8px;display:none"></div>
         <div id="uploadProgress" style="font-size:11px;color:var(--amber);font-weight:700;margin-top:4px;display:none">Processing image...</div>
       </div>
-      <!-- Fallback direct button for mobile -->
+      <!-- Mobile-friendly buttons -->
       <div style="display:flex;gap:8px;margin-top:10px">
-        <button type="button" onclick="document.getElementById('fileInput').click()" style="flex:1;padding:10px;background:var(--teal-dim);border:1px solid rgba(78,205,196,0.3);border-radius:10px;color:var(--teal);font-family:Nunito,sans-serif;font-size:13px;font-weight:700;cursor:pointer">📷 Camera / Gallery</button>
-        <button type="button" onclick="clearUpload()" style="padding:10px 14px;background:var(--card2);border:1px solid var(--border2);border-radius:10px;color:var(--text3);font-family:Nunito,sans-serif;font-size:13px;font-weight:700;cursor:pointer">✕ Clear</button>
+        <button type="button" onclick="triggerCamera()" style="flex:1;padding:10px;background:var(--rose-dim);border:1px solid rgba(255,122,138,0.3);border-radius:10px;color:var(--rose);font-family:Nunito,sans-serif;font-size:13px;font-weight:700;cursor:pointer">📷 Take Photo</button>
+        <button type="button" onclick="triggerGallery()" style="flex:1;padding:10px;background:var(--teal-dim);border:1px solid rgba(78,205,196,0.3);border-radius:10px;color:var(--teal);font-family:Nunito,sans-serif;font-size:13px;font-weight:700;cursor:pointer">🖼 Gallery</button>
+        <button type="button" onclick="clearUpload()" style="padding:10px 14px;background:var(--card2);border:1px solid var(--border2);border-radius:10px;color:var(--text3);font-family:Nunito,sans-serif;font-size:13px;font-weight:700;cursor:pointer">✕</button>
       </div>
+      <!-- Hidden inputs: one for camera, one for gallery -->
+      <input type="file" id="fileInputCamera" accept="image/*" capture="environment" onchange="handleFile(event)" style="display:none" />
+      <input type="file" id="fileInputGallery" accept="image/*" onchange="handleFile(event)" style="display:none" />
     </div>
     <button class="save-btn" onclick="saveDoc()">Save Document</button>
   </div>
@@ -893,6 +897,9 @@ function renderDocs(){
 
 function filterDocs(f,el){currentDocFilter=f;document.querySelectorAll('.doc-filter').forEach(x=>x.classList.remove('active'));el.classList.add('active');renderDocs();}
 
+function triggerCamera(){ document.getElementById('fileInputCamera').click(); }
+function triggerGallery(){ document.getElementById('fileInputGallery').click(); }
+
 function handleFile(e){
   const file=e.target.files[0];
   if(!file){toast('No file selected');return;}
@@ -940,7 +947,8 @@ function clearUpload(){
   document.getElementById('uploadPreview').style.display='none';
   document.getElementById('fileNameShow').style.display='none';
   document.getElementById('uploadProgress').style.display='none';
-  document.getElementById('fileInput').value='';
+  document.getElementById('fileInputCamera').value='';
+  document.getElementById('fileInputGallery').value='';
   toast('Image cleared');
 }
 function openDocModal(){
@@ -952,7 +960,8 @@ function openDocModal(){
   document.getElementById('uploadPreview').style.display='none';
   document.getElementById('fileNameShow').style.display='none';
   document.getElementById('uploadProgress').style.display='none';
-  document.getElementById('fileInput').value='';
+  document.getElementById('fileInputCamera').value='';
+  document.getElementById('fileInputGallery').value='';
   document.getElementById('docModal').classList.add('open');
   // Small delay so modal is visible before keyboard pops up
   setTimeout(()=>document.getElementById('docTitle').focus(),300);
