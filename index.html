@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mummy's Medicines</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&family=Playfair+Display:wght@500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!-- Firebase -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, deleteDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAPcyS2N7eUVLNpaduDZY9FAwGCPk7yPpo",
+  authDomain: "mummy-medical.firebaseapp.com",
+  projectId: "mummy-medical",
+  storageBucket: "mummy-medical.firebasestorage.app",
+  messagingSenderId: "1016681332731",
+  appId: "1:1016681332731:web:04a6496991b7ab8e6e155e"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// ── PIN ──────────────────────────────────────────────────
+const CORRECT_PIN = "1234"; // Change this to your secret PIN
+let isUnlocked = false;
+
+window.checkPin = function() {
+  const entered = document.getElementById('pinInput').value;
+  if (entered === CORRECT_PIN) {
+    isUnlocked = true;
+    document.getElementById('pinOverlay').style.display = 'none';
+    document.getElementById('lockBadge').style.display = 'none';
+    document.getElementById('unlockBadge').style.display = 'flex';
+    toast('Unlocked — you can now add & edit');
+  } else {
+    document.getElementById('pinInput').classList.add('pin-shake');
+    document.getElementById('pinError').style.display = 'block';
+    setTimeout(() => {
+      document.getElementById('pinInput').classList.remove('pin-shake');
+      document.getElementById('pinInput').value = '';
+    }, 600);
+  }
+}
+
+window.showPinOverlay = function() {
+  if (isUnlocked) { lockApp(); return; }
+  document.getElementById('pinOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('pinInput').focus(), 100);
+}
+
+window.closePinOverlay = function() {
+  document.getElementById('pinOverlay').style.display = 'none';
+}
+
+function lockApp() {
+  isUnlocked = false;
+  document.getElementById('lockBadge').style.display = 'flex';
+  document.getElementById('unlockBadge').style.display = 'none';
+  toast('Locked');
+}
+
+function requirePin(fn) {
+  if (isUnlocked) { fn(); return; }
+  toast('🔒 Enter PIN to make changes');
+  document.getElementById('pinOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('pinInput').focus(), 100);
+}
+
+// ── STOCK ─────────────────────────────────────────────────
+const stockRef = doc(db, 'mummy', 'stock');
+const reportsCol = collection(db, 'mummy', 'data', 'reports');
+const docsCol = collection(db, 'mummy', 'data', 'documents');
+
+// Listen to stock changes in real-time
+onSnapshot(stockRef, (snap) => {
+  if (snap.exists()) {
+    const data = snap.data();
+    MEDS.forEach(m => { window.stock[m.id] = data[m.id] ?? m.def; });
+  } else {
+    // First time: init from defaults
+    const init = {};
+    MEDS.forEach(m => { init[m.id] = m.def; window.stock[m.id] = m.def; });
+    setDoc(stockRef, init);
+  }
+  renderPills(); renderMeds();
+});
+
+// Listen to reports in real-time
+onSnapshot(query(reportsCol, orderBy('date', 'asc')), (snap) => {
+  window.reports = snap.docs.map(d => ({ ...d.data(), _id: d.id }));
+  renderPills();
+  if (document.getElementById('page-reports').classList.contains('active')) renderReports();
+});
+
+// Listen to docs in real-time
+onSnapshot(query(docsCol, orderBy('date', 'desc')), (snap) => {
+  window.docs = snap.docs.map(d => ({ ...d.data(), _id: d.id }));
+  if (document.getElementById('page-docs').classList.contains('active')) renderDocs();
+});
+
+// ── STOCK ACTIONS ──────────────────────────────────────────
+window.addStrip = function(id) {
+  requirePin(async () => {
+    const m = MEDS.find(x => x.id === id);
+    window.stock[id] = (window.stock[id] || 0) + m.perStrip;
+    await setDoc(stockRef, { [id]: window.stock[id] }, { merge: true });
+    toast(`+1 strip · ${m.perStrip} tablets added`);
+  });
+};
+
+window.removeStrip = function(id) {
+  requirePin(async () => {
+    const m = MEDS.find(x => x.id === id);
+    window.stock[id] = Math.max(0, (window.stock[id] || 0) - m.perStrip);
+    await setDoc(stockRef, { [id]: window.stock[id] }, { merge: true });
+    toast('−1 strip removed');
+  });
+};
+
+// ── REPORTS ───────────────────────────────────────────────
+window.saveReport = function() {
+  requirePin(async () => {
+    const date = document.getElementById('rptDate').value;
+    const notes = document.getElementById('rptNotes').value.trim();
+    const vals = {};
+    ['creat','bun','egfr','uric','k','na','hb','ca','phos','rbs','acr','bp'].forEach(k => {
+      const v = document.getElementById('rpt_' + k).value;
+      if (v !== '') vals[k] = parseFloat(v);
+    });
+    if (!date) { toast('Please enter a date'); return; }
+    if (Object.keys(vals).length === 0) { toast('Please enter at least one value'); return; }
+    await addDoc(reportsCol, { date, vals, notes, ts: Date.now() });
+    closeReportModal(); toast('Report saved');
+  });
+};
+
+window.deleteReport = function(firestoreId) {
+  requirePin(async () => {
+    if (!confirm('Delete this report entry?')) return;
+    await deleteDoc(doc(db, 'mummy', 'data', 'reports', firestoreId));
+    toast('Report deleted');
+  });
+};
+
+// ── DOCUMENTS ─────────────────────────────────────────────
+window.saveDoc = function() {
+  requirePin(async () => {
+    const title = document.getElementById('docTitle').value.trim() || 'Document';
+    const type = document.getElementById('docType').value;
+    const date = document.getElementById('docDate').value || new Date().toISOString().split('T')[0];
+    const amount = document.getElementById('docAmt').value;
+    const notes = document.getElementById('docNotes').value.trim();
+    const img = window.pendingImg || '';
+    await addDoc(docsCol, { title, type, date, amount, notes, img, ts: Date.now() });
+    closeDocModal(); toast('Document saved');
+  });
+};
+
+window.deleteDoc = function(firestoreId) {
+  requirePin(async () => {
+    if (!confirm('Delete this document?')) return;
+    await deleteDoc(doc(db, 'mummy', 'data', 'documents', firestoreId));
+    toast('Deleted');
+  });
+};
+
+// Expose db for any future use
+window._db = db;
+</script>
+<style>
+:root{
+  --bg:#0F0F14;--bg2:#16161E;--card:#1C1C26;--card2:#22222E;
+  --rose:#FF7A8A;--rose-dim:rgba(255,122,138,0.15);--rose-glow:rgba(255,122,138,0.08);
+  --teal:#4ECDC4;--teal-dim:rgba(78,205,196,0.15);
+  --amber:#FFB347;--amber-dim:rgba(255,179,71,0.15);
+  --lav:#B39DDB;--lav-dim:rgba(179,157,219,0.15);
+  --sage:#69D18A;--sage-dim:rgba(105,209,138,0.15);
+  --blue:#5B9CF6;--blue-dim:rgba(91,156,246,0.15);
+  --text:#F0EEF8;--text2:#9590AA;--text3:#5A5570;
+  --border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.12);
+  --shadow:0 4px 24px rgba(0,0,0,0.4);--shadow-sm:0 2px 12px rgba(0,0,0,0.3);
+  --sidebar:240px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Nunito',sans-serif;color:var(--text)}
+.shell{display:flex;height:100vh;overflow:hidden}
+
+/* SIDEBAR */
+.sidebar{width:var(--sidebar);flex-shrink:0;background:linear-gradient(180deg,#1A0F2E 0%,#0F1228 100%);border-right:1px solid rgba(255,122,138,0.12);display:flex;flex-direction:column;overflow:hidden;position:relative;z-index:10}
+.sidebar::before{content:'';position:absolute;top:-80px;left:-60px;width:200px;height:200px;border-radius:50%;background:radial-gradient(circle,rgba(255,122,138,0.08) 0%,transparent 70%);pointer-events:none}
+.sidebar::after{content:'';position:absolute;bottom:-60px;right:-40px;width:160px;height:160px;border-radius:50%;background:radial-gradient(circle,rgba(78,205,196,0.06) 0%,transparent 70%);pointer-events:none}
+.brand{padding:24px 20px 18px;border-bottom:1px solid var(--border);flex-shrink:0;position:relative;z-index:1}
+.brand-name{font-family:'Playfair Display',serif;font-size:18px;font-weight:600;color:var(--text);line-height:1.2}
+.brand-name span{color:var(--rose)}
+.brand-sub{font-size:10px;color:var(--text3);margin-top:5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase}
+.clock-blk{padding:14px 20px 16px;border-bottom:1px solid var(--border);flex-shrink:0;position:relative;z-index:1}
+.clock-time{font-family:'Playfair Display',serif;font-size:26px;color:var(--rose);font-weight:500;text-shadow:0 0 20px rgba(255,122,138,0.35);line-height:1}
+.clock-date{font-size:11px;color:var(--text2);margin-top:4px;font-weight:600}
+.nav-menu{flex:1;overflow-y:auto;padding:14px 12px;position:relative;z-index:1}
+.nav-item{display:flex;align-items:center;gap:11px;padding:10px 14px;border-radius:12px;font-size:13px;font-weight:700;color:var(--text2);cursor:pointer;transition:all 0.18s;margin-bottom:3px;border:1px solid transparent}
+.nav-item .ni{font-size:17px;flex-shrink:0}
+.nav-item:hover{background:var(--card2);color:var(--text)}
+.nav-item.active{background:var(--rose-dim);color:var(--rose);border-color:rgba(255,122,138,0.2)}
+.sidebar-pills{padding:12px 12px 16px;flex-shrink:0;border-top:1px solid var(--border);position:relative;z-index:1}
+.sp-row{display:flex;gap:6px;margin-bottom:6px}
+.sp{flex:1;background:var(--card);border-radius:10px;padding:8px 4px;text-align:center;border:1px solid var(--border)}
+.sp-n{font-family:'Playfair Display',serif;font-size:18px;font-weight:600;line-height:1}
+.sp-l{font-size:8px;color:var(--text3);margin-top:2px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em}
+.c-rose{color:var(--rose)}.c-amber{color:var(--amber)}.c-sage{color:var(--sage)}.c-lav{color:var(--lav)}
+
+/* LOCK BADGE */
+.lock-badge{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;font-size:11px;font-weight:800;cursor:pointer;border:1px solid;transition:all 0.2s}
+#lockBadge{background:var(--rose-dim);color:var(--rose);border-color:rgba(255,122,138,0.3)}
+#unlockBadge{display:none;background:var(--sage-dim);color:var(--sage);border-color:rgba(105,209,138,0.3)}
+
+/* MAIN */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+.top-bar{flex-shrink:0;padding:16px 28px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#0F0F14 0%,#13131C 100%)}
+.page-title{font-family:'Playfair Display',serif;font-size:20px;font-weight:600;color:var(--text)}
+.page-sub{font-size:11px;color:var(--text3);margin-top:2px;font-weight:600}
+.content{flex:1;overflow-y:auto;padding:22px 28px 40px}
+.page{display:none}.page.active{display:block}
+.sec-title{font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:0.1em;margin:0 0 14px;display:flex;align-items:center;gap:8px}
+.sec-title::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* MED CARDS */
+.med-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.med-card{background:var(--card);border-radius:16px;padding:16px 18px;border:1px solid var(--border);position:relative;overflow:hidden;transition:transform 0.15s,box-shadow 0.15s}
+.med-card:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+.med-card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;border-radius:3px 0 0 3px}
+.med-card.ok::before{background:linear-gradient(180deg,var(--sage),var(--teal))}
+.med-card.warning::before{background:linear-gradient(180deg,var(--amber),#FF8C42)}
+.med-card.danger::before{background:linear-gradient(180deg,var(--rose),#FF4466)}
+.med-card.danger{box-shadow:0 4px 20px rgba(255,122,138,0.08)}
+.med-card.warning{box-shadow:0 4px 20px rgba(255,179,71,0.06)}
+.med-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px}
+.med-name{font-family:'Playfair Display',serif;font-size:15px;font-weight:600;color:var(--text)}
+.med-comp{font-size:11px;color:var(--text3);margin-top:2px;line-height:1.4}
+.badge{font-size:10px;font-weight:800;padding:3px 9px;border-radius:20px;border:1px solid transparent;white-space:nowrap}
+.badge.ok{background:var(--sage-dim);color:var(--sage);border-color:rgba(105,209,138,0.2)}
+.badge.warning{background:var(--amber-dim);color:var(--amber);border-color:rgba(255,179,71,0.2)}
+.badge.danger{background:var(--rose-dim);color:var(--rose);border-color:rgba(255,122,138,0.2)}
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px}
+.chip{font-size:10px;color:var(--text2);background:var(--bg2);border-radius:8px;padding:3px 8px;font-weight:600;border:1px solid var(--border)}
+.prog-row{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.prog-lbl{font-size:11px;color:var(--text3);min-width:48px;font-weight:700}
+.prog-track{flex:1;height:6px;background:var(--bg);border-radius:10px;overflow:hidden;border:1px solid var(--border)}
+.prog-fill{height:100%;border-radius:10px;transition:width 0.5s ease}
+.prog-val{font-size:12px;font-weight:700;color:var(--text2);min-width:40px;text-align:right}
+.strip-row{display:flex;align-items:center;justify-content:space-between}
+.strip-btn{font-size:12px;font-weight:700;padding:8px 16px;border-radius:10px;border:1px solid rgba(78,205,196,0.3);background:var(--teal-dim);color:var(--teal);cursor:pointer;transition:all 0.15s}
+.strip-btn:hover{background:rgba(78,205,196,0.22)}
+.remove-strip-btn{font-size:11px;font-weight:700;padding:7px 12px;border-radius:10px;border:1px solid var(--border2);background:var(--card2);color:var(--text3);cursor:pointer;transition:all 0.15s}
+.remove-strip-btn:hover{border-color:rgba(255,122,138,0.3);color:var(--rose)}
+.refill-row{display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.refill-txt{font-size:11px;color:var(--text3);font-weight:600}
+.refill-txt b{color:var(--text2)}
+.days-tag{font-size:10px;font-weight:800;padding:2px 8px;border-radius:20px;border:1px solid transparent}
+.dt-ok{background:var(--sage-dim);color:var(--sage);border-color:rgba(105,209,138,0.2)}
+.dt-warn{background:var(--amber-dim);color:var(--amber);border-color:rgba(255,179,71,0.2)}
+.dt-danger{background:var(--rose-dim);color:var(--rose);border-color:rgba(255,122,138,0.2)}
+.note-bar{font-size:11px;color:var(--amber);background:var(--amber-dim);padding:6px 10px;border-radius:8px;margin-top:8px;font-weight:700;border:1px solid rgba(255,179,71,0.2)}
+
+/* DOCS */
+.doc-add-btn{display:flex;align-items:center;gap:8px;padding:13px 18px;background:var(--rose-glow);border:1.5px dashed rgba(255,122,138,0.4);border-radius:14px;font-size:13px;font-weight:700;color:var(--rose);cursor:pointer;margin-bottom:18px;transition:all 0.2s;width:fit-content}
+.doc-add-btn:hover{background:var(--rose-dim)}
+.doc-filters{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
+.doc-filter{font-size:11px;font-weight:700;padding:6px 14px;border-radius:20px;border:1px solid var(--border2);background:var(--card2);color:var(--text2);cursor:pointer;transition:all 0.2s}
+.doc-filter.active{background:var(--lav-dim);color:var(--lav);border-color:rgba(179,157,219,0.3)}
+.doc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.doc-card{background:var(--card);border-radius:14px;padding:14px;border:1px solid var(--border);display:flex;gap:12px;align-items:flex-start;transition:transform 0.15s}
+.doc-card:hover{transform:translateY(-1px)}
+.doc-thumb{width:52px;height:52px;border-radius:10px;flex-shrink:0;background:var(--bg2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;overflow:hidden}
+.doc-thumb img{width:100%;height:100%;object-fit:cover;border-radius:9px}
+.doc-info{flex:1;min-width:0}
+.doc-title{font-family:'Playfair Display',serif;font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.doc-meta{font-size:10px;color:var(--text3);margin-top:3px;font-weight:600}
+.doc-tag{display:inline-block;font-size:10px;font-weight:800;padding:2px 8px;border-radius:20px;margin-top:5px;border:1px solid transparent}
+.tag-rx{background:var(--lav-dim);color:var(--lav);border-color:rgba(179,157,219,0.2)}
+.tag-doc{background:var(--amber-dim);color:var(--amber);border-color:rgba(255,179,71,0.2)}
+.tag-med{background:var(--teal-dim);color:var(--teal);border-color:rgba(78,205,196,0.2)}
+.doc-actions{display:flex;gap:6px;flex-shrink:0}
+.doc-btn{width:28px;height:28px;border-radius:8px;border:1px solid var(--border2);background:var(--card2);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all 0.15s}
+.doc-btn:hover{background:var(--rose-dim);border-color:rgba(255,122,138,0.3)}
+.empty-state{text-align:center;padding:60px 20px;color:var(--text3)}
+.empty-state .ei{font-size:48px;margin-bottom:12px}
+.empty-state p{font-size:14px;font-weight:600;line-height:1.6}
+
+/* REPORTS */
+.reports-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.add-report-btn{display:flex;align-items:center;gap:8px;padding:10px 18px;background:var(--blue-dim);border:1px solid rgba(91,156,246,0.3);border-radius:12px;font-size:13px;font-weight:700;color:var(--blue);cursor:pointer;transition:all 0.2s}
+.add-report-btn:hover{background:rgba(91,156,246,0.22)}
+.metric-selector{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:22px}
+.metric-pill{display:flex;flex-direction:column;padding:10px 16px;border-radius:14px;background:var(--card);border:1px solid var(--border);cursor:pointer;transition:all 0.18s;min-width:110px}
+.metric-pill:hover{border-color:var(--border2);transform:translateY(-1px)}
+.metric-pill.active{border-color:rgba(91,156,246,0.4);background:var(--blue-dim)}
+.metric-pill.active .mp-label{color:var(--blue)}
+.mp-label{font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:0.05em}
+.mp-val{font-family:'Playfair Display',serif;font-size:18px;font-weight:600;margin-top:2px}
+.mp-val.normal{color:var(--sage)}.mp-val.high{color:var(--rose)}.mp-val.mild{color:var(--amber)}.mp-val.none{color:var(--text3);font-size:13px}
+.mp-date{font-size:9px;color:var(--text3);font-weight:600;margin-top:1px}
+.chart-expanded{background:var(--card);border-radius:16px;padding:22px;border:1px solid var(--border2);margin-bottom:22px;display:none}
+.chart-expanded.open{display:block}
+.chart-exp-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px}
+.chart-exp-title{font-family:'Playfair Display',serif;font-size:17px;font-weight:600;color:var(--text)}
+.chart-exp-meta{font-size:11px;color:var(--text3);margin-top:3px;font-weight:600}
+.chart-exp-canvas{position:relative;height:200px}
+.chart-range-bar{display:flex;gap:12px;margin-top:14px;flex-wrap:wrap}
+.crb{font-size:11px;font-weight:700;padding:4px 10px;border-radius:8px}
+.crb-normal{background:var(--sage-dim);color:var(--sage)}.crb-high{background:var(--rose-dim);color:var(--rose)}.crb-mild{background:var(--amber-dim);color:var(--amber)}
+.report-history{background:var(--card);border-radius:16px;padding:20px;border:1px solid var(--border);margin-bottom:18px}
+.report-entry{display:flex;align-items:stretch;padding:12px 0;border-bottom:1px solid var(--border)}
+.report-entry:last-child{border-bottom:none;padding-bottom:0}
+.re-date-col{min-width:90px;flex-shrink:0;padding-right:16px;border-right:1px solid var(--border)}
+.re-date{font-size:12px;font-weight:700;color:var(--text2)}
+.re-ago{font-size:10px;color:var(--text3);margin-top:2px;font-weight:600}
+.re-vals{flex:1;display:flex;flex-wrap:wrap;gap:8px;padding-left:16px;align-items:center}
+.re-val{background:var(--bg2);border-radius:8px;padding:5px 10px;border:1px solid var(--border)}
+.rv-name{font-size:9px;color:var(--text3);font-weight:800;text-transform:uppercase;letter-spacing:0.05em}
+.rv-num{font-size:13px;font-weight:700;margin-top:1px}
+.rv-num.normal{color:var(--sage)}.rv-num.high{color:var(--rose)}.rv-num.mild{color:var(--amber)}
+.re-actions{display:flex;align-items:center;gap:6px;flex-shrink:0;padding-left:12px}
+
+/* INFO */
+.info-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px}
+.info-card{background:var(--card);border-radius:16px;padding:18px;box-shadow:var(--shadow-sm);border:1px solid var(--border)}
+.info-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
+.info-row:last-child{border-bottom:none}
+.info-lbl{font-size:12px;color:var(--text3);font-weight:700}
+.info-val{font-size:12px;color:var(--text);font-weight:600;text-align:right;max-width:60%}
+.call-btn{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--rose);text-decoration:none;background:var(--rose-dim);padding:10px 14px;border-radius:12px;border:1px solid rgba(255,122,138,0.2);margin-bottom:8px;transition:all 0.15s}
+.call-btn:hover{background:rgba(255,122,138,0.2)}
+.info-advice{background:var(--amber-dim);border-radius:14px;padding:14px;border:1px solid rgba(255,179,71,0.2)}
+.advice-line{font-size:13px;font-weight:700;color:var(--amber);padding:4px 0;line-height:1.5}
+.test-chips{display:flex;flex-wrap:wrap;gap:6px;padding-top:4px}
+.test-chip{background:var(--teal-dim);color:var(--teal);border:1px solid rgba(78,205,196,0.2);padding:5px 12px;border-radius:20px;font-size:11px;font-weight:800}
+
+/* MODAL */
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:100;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal-bg.open{display:flex}
+.modal{background:var(--card);border-radius:20px;padding:28px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto;animation:fadeScale 0.25s ease;border:1px solid var(--border2);box-shadow:0 24px 80px rgba(0,0,0,0.6)}
+@keyframes fadeScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+.modal-title{font-family:'Playfair Display',serif;font-size:18px;font-weight:600;color:var(--text);margin-bottom:20px;display:flex;justify-content:space-between;align-items:center}
+.modal-close{font-size:15px;cursor:pointer;color:var(--text3);background:var(--card2);border:1px solid var(--border);width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all 0.15s}
+.modal-close:hover{border-color:var(--rose);color:var(--rose)}
+.form-group{margin-bottom:14px}
+.form-label{font-size:11px;font-weight:800;color:var(--text2);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.06em}
+.form-input,.form-select,.form-textarea{width:100%;padding:11px 14px;border:1px solid var(--border2);border-radius:12px;background:var(--bg2);font-family:'Nunito',sans-serif;font-size:14px;color:var(--text);outline:none;transition:border 0.2s}
+.form-input:focus,.form-select:focus,.form-textarea:focus{border-color:var(--rose)}
+.form-select option{background:var(--card)}
+.form-textarea{resize:none;height:70px}
+.upload-zone{border:1.5px dashed var(--border2);border-radius:12px;padding:20px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--bg2)}
+.upload-zone:hover{border-color:rgba(255,122,138,0.4);background:var(--rose-glow)}
+.upload-preview{width:100%;max-height:200px;object-fit:contain;border-radius:10px;margin-top:10px;display:none;border:1px solid var(--border)}
+.save-btn{width:100%;padding:13px;background:linear-gradient(135deg,#FF7A8A,#B39DDB);border:none;border-radius:13px;font-family:'Nunito',sans-serif;font-size:15px;font-weight:800;color:#fff;cursor:pointer;margin-top:6px;transition:opacity 0.2s;letter-spacing:0.02em;box-shadow:0 4px 20px rgba(255,122,138,0.25)}
+.save-btn:hover{opacity:0.9}
+.report-fields-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* PIN OVERLAY */
+.pin-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:500;align-items:center;justify-content:center;backdrop-filter:blur(8px)}
+.pin-box{background:var(--card);border-radius:24px;padding:36px 32px;width:320px;text-align:center;border:1px solid var(--border2);box-shadow:0 24px 80px rgba(0,0,0,0.7);animation:fadeScale 0.2s ease}
+.pin-icon{font-size:40px;margin-bottom:12px}
+.pin-title{font-family:'Playfair Display',serif;font-size:20px;font-weight:600;color:var(--text);margin-bottom:6px}
+.pin-sub{font-size:12px;color:var(--text3);margin-bottom:22px;font-weight:600}
+.pin-input{width:100%;padding:14px;border:2px solid var(--border2);border-radius:14px;background:var(--bg2);font-family:'Playfair Display',serif;font-size:28px;color:var(--text);text-align:center;outline:none;letter-spacing:8px;transition:border 0.2s}
+.pin-input:focus{border-color:var(--rose)}
+.pin-error{font-size:12px;color:var(--rose);margin-top:8px;font-weight:700;display:none}
+.pin-btn{width:100%;padding:13px;background:linear-gradient(135deg,#FF7A8A,#B39DDB);border:none;border-radius:13px;font-family:'Nunito',sans-serif;font-size:15px;font-weight:800;color:#fff;cursor:pointer;margin-top:14px;transition:opacity 0.2s}
+.pin-btn:hover{opacity:0.9}
+.pin-cancel{font-size:12px;color:var(--text3);cursor:pointer;margin-top:12px;font-weight:700;display:block}
+.pin-cancel:hover{color:var(--text2)}
+@keyframes pin-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
+.pin-shake{animation:pin-shake 0.4s ease}
+
+/* LIGHTBOX */
+.lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:200;align-items:center;justify-content:center;flex-direction:column}
+.lightbox.open{display:flex}
+.lightbox img{max-width:90vw;max-height:80vh;border-radius:12px;object-fit:contain;border:1px solid var(--border2)}
+.lightbox-close{position:absolute;top:20px;right:20px;color:#fff;font-size:18px;cursor:pointer;background:rgba(255,255,255,0.12);width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.2)}
+.lightbox-name{color:rgba(255,255,255,0.5);font-size:13px;margin-top:14px;font-weight:600}
+
+/* SYNC INDICATOR */
+.sync-dot{width:7px;height:7px;border-radius:50%;background:var(--sage);box-shadow:0 0 6px rgba(105,209,138,0.6);margin-left:6px;display:inline-block;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+
+/* TOAST */
+.toast{position:fixed;bottom:24px;right:24px;background:var(--card2);color:var(--text);padding:12px 20px;border-radius:14px;font-size:13px;font-weight:700;z-index:600;transition:all 0.3s;pointer-events:none;opacity:0;transform:translateY(10px);border:1px solid var(--border2);box-shadow:var(--shadow)}
+.toast.show{opacity:1;transform:translateY(0)}
+
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:10px}
+
+@media(max-width:700px){
+  .sidebar{width:60px}
+  .brand,.clock-blk,.sidebar-pills{display:none}
+  .nav-menu{padding:10px 6px}
+  .nav-item{padding:10px;justify-content:center}
+  .nav-item .ni{font-size:20px}
+  .nav-item .nl{display:none}
+  .content{padding:14px 14px 30px}
+  .top-bar{padding:12px 16px 10px}
+  .med-grid{grid-template-columns:1fr}
+  .info-grid{grid-template-columns:1fr}
+  .doc-grid{grid-template-columns:1fr}
+  .report-fields-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<!-- PIN OVERLAY -->
+<div class="pin-overlay" id="pinOverlay" onclick="if(event.target===this)closePinOverlay()">
+  <div class="pin-box">
+    <div class="pin-icon">🔐</div>
+    <div class="pin-title">Enter PIN</div>
+    <div class="pin-sub">Only you can add or delete data</div>
+    <input class="pin-input" type="password" id="pinInput" maxlength="6" placeholder="••••"
+      onkeydown="if(event.key==='Enter')checkPin()" />
+    <div class="pin-error" id="pinError">Wrong PIN, try again</div>
+    <button class="pin-btn" onclick="checkPin()">Unlock</button>
+    <span class="pin-cancel" onclick="closePinOverlay()">Cancel — view only</span>
+  </div>
+</div>
+
+<div class="shell">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-name">Mummy's <span>Care</span></div>
+      <div class="brand-sub">Mrs. Sunita · Dr. Ajay Goyal</div>
+    </div>
+    <div class="clock-blk">
+      <div class="clock-time" id="clock">--:--</div>
+      <div class="clock-date" id="cdate">--</div>
+    </div>
+    <nav class="nav-menu">
+      <div class="nav-item active" onclick="showPage('meds',this)"><span class="ni">💊</span><span class="nl">Medicines</span></div>
+      <div class="nav-item" onclick="showPage('reports',this)"><span class="ni">🔬</span><span class="nl">Reports</span></div>
+      <div class="nav-item" onclick="showPage('docs',this)"><span class="ni">📄</span><span class="nl">Documents</span></div>
+      <div class="nav-item" onclick="showPage('info',this)"><span class="ni">👩‍⚕️</span><span class="nl">Info</span></div>
+    </nav>
+    <div class="sidebar-pills">
+      <div class="sp-row" id="pills-top"></div>
+      <div class="sp-row" id="pills-bot"></div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="top-bar">
+      <div>
+        <div class="page-title" id="topTitle">Medicine Stock</div>
+        <div class="page-sub" id="topSub">Kidney Care Centre · CKD G3B A3 <span class="sync-dot" title="Live sync active"></span></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="lock-badge" id="lockBadge" onclick="showPinOverlay()">🔒 Locked</div>
+        <div class="lock-badge" id="unlockBadge" onclick="showPinOverlay()">🔓 Unlocked</div>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- MEDICINES -->
+      <div class="page active" id="page-meds">
+        <div class="sec-title">Current medications</div>
+        <div class="med-grid" id="medList"></div>
+      </div>
+
+      <!-- REPORTS -->
+      <div class="page" id="page-reports">
+        <div class="reports-top">
+          <div class="sec-title" style="margin:0;flex:1">Lab report history</div>
+          <button class="add-report-btn" onclick="openReportModal()">+ Add Report</button>
+        </div>
+        <div class="metric-selector" id="metricSelector"></div>
+        <div class="chart-expanded" id="chartExpanded">
+          <div class="chart-exp-header">
+            <div>
+              <div class="chart-exp-title" id="chartExpTitle">-</div>
+              <div class="chart-exp-meta" id="chartExpMeta">-</div>
+            </div>
+            <button class="modal-close" onclick="closeChart()">✕</button>
+          </div>
+          <div class="chart-exp-canvas"><canvas id="chartExpCanvas"></canvas></div>
+          <div class="chart-range-bar" id="chartRangeBar"></div>
+        </div>
+        <div class="sec-title" style="margin-top:8px">All report entries</div>
+        <div class="report-history" id="reportHistory"></div>
+      </div>
+
+      <!-- DOCUMENTS -->
+      <div class="page" id="page-docs">
+        <button class="doc-add-btn" onclick="openDocModal()"><span style="font-size:18px">＋</span> Add Prescription / Bill</button>
+        <div class="doc-filters">
+          <button class="doc-filter active" onclick="filterDocs('all',this)">All</button>
+          <button class="doc-filter" onclick="filterDocs('prescription',this)">📋 Prescriptions</button>
+          <button class="doc-filter" onclick="filterDocs('doctor-bill',this)">🏥 Doctor Bills</button>
+          <button class="doc-filter" onclick="filterDocs('medicine-bill',this)">💊 Med Bills</button>
+        </div>
+        <div class="doc-grid" id="docList"></div>
+      </div>
+
+      <!-- INFO -->
+      <div class="page" id="page-info">
+        <div class="info-grid">
+          <div>
+            <div class="sec-title">Patient</div>
+            <div class="info-card">
+              <div class="info-row"><span class="info-lbl">Name</span><span class="info-val">Mrs. Sunita, 48y</span></div>
+              <div class="info-row"><span class="info-lbl">Diagnosis</span><span class="info-val" style="font-size:11px">CKD G3B A3 · Polyarthritis</span></div>
+              <div class="info-row"><span class="info-lbl">Diet</span><span class="info-val" style="font-size:11px">Salt-restricted · Renal diet</span></div>
+              <div class="info-row"><span class="info-lbl">BP</span><span class="info-val">118/79 mmHg</span></div>
+              <div class="info-row"><span class="info-lbl">Weight</span><span class="info-val">64.9 kg</span></div>
+              <div class="info-row"><span class="info-lbl">Next Visit</span><span class="info-val" style="color:var(--teal);font-weight:800">~2 months</span></div>
+            </div>
+            <div class="sec-title" style="margin-top:18px">Advice</div>
+            <div class="info-advice">
+              <div class="advice-line">🚫 Avoid painkillers strictly</div>
+              <div class="advice-line">🩺 Self BP monitoring daily</div>
+              <div class="advice-line">🔬 Tests: KFT, RBS, CBC, CA/PO4, Urine R/M</div>
+              <div class="advice-line">🦴 Rheumatology follow-up needed</div>
+            </div>
+          </div>
+          <div>
+            <div class="sec-title">Doctor</div>
+            <div class="info-card">
+              <div style="font-family:'Playfair Display',serif;font-size:16px;font-weight:600;color:var(--text);margin-bottom:4px">Dr. Ajay Goyal</div>
+              <div style="font-size:12px;color:var(--text3);margin-bottom:14px">MD, DM Nephrology · Kidney Transplant Physician</div>
+              <a href="tel:+917783983977" class="call-btn">📞 +91 77839 83977</a>
+              <a href="tel:+918872966651" class="call-btn">📞 +91 88729 66651</a>
+              <div style="font-size:12px;color:var(--text3);padding:10px 12px;background:var(--bg2);border-radius:10px;border:1px solid var(--border);line-height:1.7;font-weight:600">
+                📍 S.C.O. 137, Sector-14, Panchkula<br>
+                🕐 Mon–Sat 10AM–1PM · Eve 5–6PM (No Tue eve)
+              </div>
+            </div>
+            <div class="sec-title" style="margin-top:18px">Next Tests</div>
+            <div class="info-card">
+              <div class="test-chips">
+                <span class="test-chip">KFT</span><span class="test-chip">RBS</span><span class="test-chip">CBC</span>
+                <span class="test-chip">CA/PO4</span><span class="test-chip">Urine R/M</span>
+                <span class="test-chip">Spot Urine ALB/Creat</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ADD DOC MODAL -->
+<div class="modal-bg" id="docModal" onclick="if(event.target===this)closeDocModal()">
+  <div class="modal">
+    <div class="modal-title">Add Document <button class="modal-close" onclick="closeDocModal()">✕</button></div>
+    <div class="form-group">
+      <label class="form-label">Document Type</label>
+      <select class="form-select" id="docType">
+        <option value="prescription">📋 Prescription</option>
+        <option value="doctor-bill">🏥 Doctor Visit Bill</option>
+        <option value="medicine-bill">💊 Medicine Purchase Bill</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Title / Description</label>
+      <input class="form-input" type="text" id="docTitle" placeholder="e.g. Dr. Goyal visit — June 2026" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Date</label>
+      <input class="form-input" type="date" id="docDate" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Amount (₹) — for bills</label>
+      <input class="form-input" type="number" id="docAmt" placeholder="Leave blank for prescriptions" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <textarea class="form-textarea" id="docNotes" placeholder="Any extra info..."></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Photo / Scan</label>
+      <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
+        <div style="font-size:28px">📸</div>
+        <div style="font-size:13px;color:var(--text3);margin-top:6px;font-weight:600">Click to upload photo or scan</div>
+        <input type="file" id="fileInput" accept="image/*" onchange="handleFile(event)" />
+        <img id="uploadPreview" class="upload-preview" />
+        <div id="fileNameShow" style="font-size:11px;color:var(--teal);font-weight:700;margin-top:6px;display:none"></div>
+      </div>
+    </div>
+    <button class="save-btn" onclick="saveDoc()">Save Document</button>
+  </div>
+</div>
+
+<!-- ADD REPORT MODAL -->
+<div class="modal-bg" id="reportModal" onclick="if(event.target===this)closeReportModal()">
+  <div class="modal">
+    <div class="modal-title">Add Lab Report <button class="modal-close" onclick="closeReportModal()">✕</button></div>
+    <div class="form-group">
+      <label class="form-label">Report Date</label>
+      <input class="form-input" type="date" id="rptDate" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Lab Values — leave blank if not tested</label>
+      <div class="report-fields-grid">
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">Creatinine (mg/dL)</label><input class="form-input" type="number" step="0.01" id="rpt_creat" placeholder="e.g. 1.8" /></div>
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">BUN (mg/dL)</label><input class="form-input" type="number" step="0.1" id="rpt_bun" placeholder="e.g. 24" /></div>
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">eGFR (mL/min)</label><input class="form-input" type="number" step="0.1" id="rpt_egfr" placeholder="e.g. 38" /></div>
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">Uric Acid (mg/dL)</label><input class="form-input" type="number" step="0.1" id="rpt_uric" placeholder="e.g. 6.2" /></div>
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">Potassium (mEq/L)</label><input class="form-input" type="number" step="0.1" id="rpt_k" placeholder="e.g. 4.5" /></div>
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">Sodium (mEq/L)</label><input class="form-input" type="number" step="0.1" id="rpt_na" placeholder="e.g. 138" /></div>
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">Hemoglobin (g/dL)</label><input class="form-input" type="number" step="0.1" id="rpt_hb" placeholder="e.g. 11.5" /></div>
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">Calcium (mg/dL)</label><input class="form-input" type="number" step="0.1" id="rpt_ca" placeholder="e.g. 9.2" /></div>
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">Phosphorus (mg/dL)</label><input class="form-input" type="number" step="0.1" id="rpt_phos" placeholder="e.g. 3.8" /></div>
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">RBS / Blood Sugar (mg/dL)</label><input class="form-input" type="number" step="0.1" id="rpt_rbs" placeholder="e.g. 110" /></div>
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">Urine ALB/Creat Ratio</label><input class="form-input" type="number" step="0.1" id="rpt_acr" placeholder="e.g. 120" /></div>
+        <div><label class="form-label" style="font-size:10px;margin-bottom:4px">BP Systolic (mmHg)</label><input class="form-input" type="number" step="1" id="rpt_bp" placeholder="e.g. 128" /></div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <textarea class="form-textarea" id="rptNotes" placeholder="Doctor's remarks, symptoms..."></textarea>
+    </div>
+    <button class="save-btn" onclick="saveReport()">Save Report</button>
+  </div>
+</div>
+
+<!-- LIGHTBOX -->
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <button class="lightbox-close" onclick="closeLightbox()">✕</button>
+  <img id="lbImg" src="" />
+  <div class="lightbox-name" id="lbName"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ════════════════════════════════════════
+   MEDICINE DATA
+════════════════════════════════════════ */
+const MEDS = [
+  {id:'dapaglyn',  name:'Dapaglyn 10 mg',    comp:'Dapagliflozin 10 mg',                     dose:'1–0–0', timing:'After breakfast · Daily',           perStrip:10, def:10,  min:5,  tabletsPerDay:1,   note:''},
+  {id:'cipdapla',  name:'Cipdapla 10 mg',    comp:'Dapagliflozin 10 mg (substitute)',         dose:'1–0–0', timing:'After breakfast · Daily',           perStrip:10, def:31,  min:10, tabletsPerDay:1,   note:'Substitute for Dapaglyn'},
+  {id:'nodosis',   name:'Nodosis DS',         comp:'Sodium Bicarbonate 1000 mg',              dose:'1–0–1', timing:'Before breakfast & dinner · Daily',  perStrip:15, def:108, min:15, tabletsPerDay:2,   note:''},
+  {id:'gabaneuron',name:'Gabaneuron 100 mg',  comp:'Gabapentin 100 mg + Mecobalamin 500 mcg', dose:'0–0–1', timing:'Bedtime · Daily',                   perStrip:15, def:19,  min:8,  tabletsPerDay:1,   note:''},
+  {id:'shelcal',   name:'Shelcal / Calmebor', comp:'Calcium Carbonate + Vit D3 + B12',        dose:'0–1–0', timing:'Before lunch · Alternate days',     perStrip:15, def:30,  min:8,  tabletsPerDay:0.5, note:'Alternate day — lasts longer'},
+  {id:'kerendia',  name:'Kerendia 20 mg',     comp:'Finerenone 20 mg',                        dose:'1–0–0', timing:'After breakfast · Daily',           perStrip:14, def:27,  min:7,  tabletsPerDay:1,   note:''},
+  {id:'zincovit',  name:'Zincovit',           comp:'Zinc + Multivitamins',                    dose:'1–0–0', timing:'After breakfast · Daily',           perStrip:15, def:27,  min:8,  tabletsPerDay:1,   note:''},
+  {id:'rantac',    name:'Rantac OD 300 mg',   comp:'Ranitidine 300 mg',                       dose:'0–0–1', timing:'Bedtime · Daily',                   perStrip:30, def:63,  min:10, tabletsPerDay:1,   note:''},
+  {id:'dulane',    name:'Dulane 20 mg',       comp:'Duloxetine 20 mg',                        dose:'1–0–0', timing:'After breakfast · Daily',           perStrip:10, def:26,  min:5,  tabletsPerDay:1,   note:'Avoid painkillers!'},
+];
+
+const METRICS = {
+  creat:{label:'Creatinine',   unit:'mg/dL',  normalMin:0.5,  normalMax:1.1,  highThreshold:1.4,  color:'#FF7A8A'},
+  bun:  {label:'BUN',          unit:'mg/dL',  normalMin:7,    normalMax:20,   highThreshold:25,   color:'#FFB347'},
+  egfr: {label:'eGFR',         unit:'mL/min', normalMin:60,   normalMax:120,  lowThreshold:45,    color:'#5B9CF6', inverted:true},
+  uric: {label:'Uric Acid',    unit:'mg/dL',  normalMin:2.4,  normalMax:6.0,  highThreshold:7,    color:'#B39DDB'},
+  k:    {label:'Potassium',    unit:'mEq/L',  normalMin:3.5,  normalMax:5.0,  highThreshold:5.5,  color:'#4ECDC4'},
+  na:   {label:'Sodium',       unit:'mEq/L',  normalMin:135,  normalMax:145,  highThreshold:148,  color:'#69D18A'},
+  hb:   {label:'Hemoglobin',   unit:'g/dL',   normalMin:12,   normalMax:16,   lowThreshold:11,    color:'#FF7A8A', inverted:true},
+  ca:   {label:'Calcium',      unit:'mg/dL',  normalMin:8.5,  normalMax:10.5, highThreshold:11,   color:'#FFB347'},
+  phos: {label:'Phosphorus',   unit:'mg/dL',  normalMin:2.5,  normalMax:4.5,  highThreshold:5.5,  color:'#B39DDB'},
+  rbs:  {label:'Blood Sugar',  unit:'mg/dL',  normalMin:70,   normalMax:140,  highThreshold:180,  color:'#69D18A'},
+  acr:  {label:'Urine ALB/Cr', unit:'mg/g',   normalMin:0,    normalMax:30,   highThreshold:300,  color:'#5B9CF6'},
+  bp:   {label:'BP Systolic',  unit:'mmHg',   normalMin:90,   normalMax:130,  highThreshold:140,  color:'#FF7A8A'},
+};
+
+/* Global state — written by Firebase listeners */
+window.stock = {};
+window.reports = [];
+window.docs = [];
+
+let currentDocFilter = 'all';
+let activeChartKey = null;
+let expandedChart = null;
+window.pendingImg = '';
+
+/* ════════════ REFILL CALC ════════════ */
+function calcDaysLeft(id){const m=MEDS.find(x=>x.id===id);return Math.floor((window.stock[id]||0)/m.tabletsPerDay);}
+function calcRefillStr(id){const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()+calcDaysLeft(id));return d.toISOString().split('T')[0];}
+function fmtDate(ds){return new Date(ds).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});}
+function daysTagFromCount(d){
+  if(d<=0)return`<span class="days-tag dt-danger">Out of stock!</span>`;
+  if(d===1)return`<span class="days-tag dt-danger">Last day!</span>`;
+  if(d<=7)return`<span class="days-tag dt-danger">In ${d}d</span>`;
+  if(d<=14)return`<span class="days-tag dt-warn">In ${d}d</span>`;
+  return`<span class="days-tag dt-ok">In ${d}d</span>`;
+}
+
+/* ════════════ STATUS ════════════ */
+function getStatus(id){const m=MEDS.find(x=>x.id===id),s=window.stock[id];if(s<=Math.floor(m.min*0.5))return'danger';if(s<=m.min)return'warning';return'ok';}
+function pct(id){const m=MEDS.find(x=>x.id===id);return Math.min(100,Math.round((window.stock[id]||0)/m.def*100));}
+function progCol(st){return st==='danger'?'linear-gradient(90deg,#FF4466,#FF7A8A)':st==='warning'?'linear-gradient(90deg,#FF8C42,#FFB347)':'linear-gradient(90deg,#4ECDC4,#69D18A)';}
+
+/* ════════════ RENDER PILLS ════════════ */
+function renderPills(){
+  const ok=MEDS.filter(m=>getStatus(m.id)==='ok').length;
+  const w=MEDS.filter(m=>getStatus(m.id)==='warning').length;
+  const d=MEDS.filter(m=>getStatus(m.id)==='danger').length;
+  document.getElementById('pills-top').innerHTML=`
+    <div class="sp"><div class="sp-n c-sage">${ok}</div><div class="sp-l">Stocked</div></div>
+    <div class="sp"><div class="sp-n c-amber">${w}</div><div class="sp-l">Low</div></div>`;
+  document.getElementById('pills-bot').innerHTML=`
+    <div class="sp"><div class="sp-n c-rose">${d}</div><div class="sp-l">Order</div></div>
+    <div class="sp"><div class="sp-n c-lav">${window.reports.length}</div><div class="sp-l">Reports</div></div>`;
+}
+
+/* ════════════ RENDER MEDS ════════════ */
+function renderMeds(){
+  const order={danger:0,warning:1,ok:2};
+  const sorted=[...MEDS].sort((a,b)=>order[getStatus(a.id)]-order[getStatus(b.id)]);
+  document.getElementById('medList').innerHTML=sorted.map(m=>{
+    const st=getStatus(m.id),qty=window.stock[m.id]||0;
+    const badge=st==='danger'?'Order Now':st==='warning'?'Running Low':'Stocked';
+    const strips=Math.floor(qty/m.perStrip), rem=qty%m.perStrip;
+    const daysRemaining=calcDaysLeft(m.id), refillDate=calcRefillStr(m.id);
+    return`<div class="med-card ${st}">
+      <div class="med-top">
+        <div><div class="med-name">${m.name}</div><div class="med-comp">${m.comp}</div></div>
+        <span class="badge ${st}">${badge}</span>
+      </div>
+      <div class="chips">
+        <span class="chip">💊 ${m.dose}</span>
+        <span class="chip">🕐 ${m.timing}</span>
+        <span class="chip">📦 ${m.perStrip}/strip</span>
+        <span class="chip" style="color:var(--lav)">${strips} strip${strips!==1?'s':''} + ${rem} tab</span>
+      </div>
+      <div class="prog-row">
+        <span class="prog-lbl">Tablets</span>
+        <div class="prog-track"><div class="prog-fill" style="width:${pct(m.id)}%;background:${progCol(st)}"></div></div>
+        <span class="prog-val">${qty}/${m.def}</span>
+      </div>
+      <div class="strip-row">
+        <button class="remove-strip-btn" onclick="removeStrip('${m.id}')">− 1 strip</button>
+        <button class="strip-btn" onclick="addStrip('${m.id}')">+ 1 strip (${m.perStrip} tabs)</button>
+      </div>
+      <div class="refill-row">
+        <div class="refill-txt">Refill by: <b>${fmtDate(refillDate)}</b> <span style="color:var(--text3)">(${daysRemaining}d supply)</span></div>
+        ${daysTagFromCount(daysRemaining)}
+      </div>
+      ${m.note?`<div class="note-bar">${m.note}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+/* ════════════ DOCS ════════════ */
+function tagLabel(t){return t==='prescription'?'📋 Prescription':t==='doctor-bill'?'🏥 Doctor Bill':'💊 Med Bill';}
+function tagClass(t){return t==='prescription'?'tag-rx':t==='doctor-bill'?'tag-doc':'tag-med';}
+function escA(s){return s?s.replace(/'/g,"\\'").replace(/"/g,'&quot;'):'';}
+
+function renderDocs(){
+  const filtered=currentDocFilter==='all'?window.docs:window.docs.filter(d=>d.type===currentDocFilter);
+  if(!filtered.length){document.getElementById('docList').innerHTML=`<div class="empty-state"><div class="ei">📁</div><p>No documents yet.<br>Click "+ Add" to upload.</p></div>`;return;}
+  document.getElementById('docList').innerHTML=filtered.map(d=>{
+    const thumb=d.img?`<div class="doc-thumb" onclick="openLightbox('${escA(d.img)}','${escA(d.title)}')"><img src="${d.img}"/></div>`:`<div class="doc-thumb">${d.type==='prescription'?'📋':d.type==='doctor-bill'?'🏥':'💊'}</div>`;
+    const amt=d.amount?`<span style="color:var(--teal);font-weight:800;font-size:11px"> · ₹${d.amount}</span>`:'';
+    return`<div class="doc-card">
+      ${thumb}
+      <div class="doc-info">
+        <div class="doc-title">${d.title||'Untitled'}</div>
+        <div class="doc-meta">${fmtDate(d.date)}${amt}</div>
+        ${d.notes?`<div class="doc-meta" style="font-style:italic">${d.notes}</div>`:''}
+        <span class="doc-tag ${tagClass(d.type)}">${tagLabel(d.type)}</span>
+      </div>
+      <div class="doc-actions">
+        ${d.img?`<button class="doc-btn" onclick="openLightbox('${escA(d.img)}','${escA(d.title)}')">👁</button>`:''}
+        <button class="doc-btn" onclick="deleteDoc('${d._id}')">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function filterDocs(f,el){currentDocFilter=f;document.querySelectorAll('.doc-filter').forEach(x=>x.classList.remove('active'));el.classList.add('active');renderDocs();}
+
+function handleFile(e){
+  const file=e.target.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    window.pendingImg=ev.target.result;
+    const prev=document.getElementById('uploadPreview');
+    prev.src=window.pendingImg;prev.style.display='block';
+    document.getElementById('fileNameShow').textContent='✅ '+file.name;
+    document.getElementById('fileNameShow').style.display='block';
+  };
+  reader.readAsDataURL(file);
+}
+function openDocModal(){
+  window.pendingImg='';
+  document.getElementById('docTitle').value='';
+  document.getElementById('docDate').value=new Date().toISOString().split('T')[0];
+  document.getElementById('docAmt').value='';
+  document.getElementById('docNotes').value='';
+  document.getElementById('uploadPreview').style.display='none';
+  document.getElementById('fileNameShow').style.display='none';
+  document.getElementById('docModal').classList.add('open');
+}
+function closeDocModal(){document.getElementById('docModal').classList.remove('open');}
+
+/* ════════════ REPORTS ════════════ */
+function getValClass(key,val){
+  const m=METRICS[key];if(!m)return'';
+  if(m.inverted){if(m.lowThreshold&&val<m.lowThreshold)return'high';if(val>=m.normalMin&&val<=m.normalMax)return'normal';return'mild';}
+  if(m.highThreshold&&val>=m.highThreshold)return'high';
+  if(val>=m.normalMin&&val<=m.normalMax)return'normal';
+  return'mild';
+}
+
+function openReportModal(){
+  document.getElementById('rptDate').value=new Date().toISOString().split('T')[0];
+  ['creat','bun','egfr','uric','k','na','hb','ca','phos','rbs','acr','bp'].forEach(k=>{
+    const el=document.getElementById('rpt_'+k);if(el)el.value='';
+  });
+  document.getElementById('rptNotes').value='';
+  document.getElementById('reportModal').classList.add('open');
+}
+function closeReportModal(){document.getElementById('reportModal').classList.remove('open');}
+
+function renderReports(){
+  const active=Object.keys(METRICS).filter(k=>window.reports.some(r=>r.vals&&r.vals[k]!=null));
+  const sel=document.getElementById('metricSelector');
+  if(!active.length){
+    sel.innerHTML=`<div class="empty-state" style="width:100%"><div class="ei">🔬</div><p>No reports yet.<br>Click "+ Add Report" to start tracking.</p></div>`;
+    document.getElementById('chartExpanded').classList.remove('open');
+  } else {
+    sel.innerHTML=active.map(k=>{
+      const mc=METRICS[k];
+      const last=window.reports.filter(r=>r.vals&&r.vals[k]!=null).slice(-1)[0];
+      const cls=last?getValClass(k,last.vals[k]):'none';
+      return`<div class="metric-pill${activeChartKey===k?' active':''}" onclick="openChart('${k}')">
+        <span class="mp-label">${mc.label}</span>
+        <span class="mp-val ${cls}">${last?last.vals[k]:'—'}</span>
+        <span class="mp-date">${last?fmtDate(last.date):'No data'}</span>
+      </div>`;
+    }).join('');
+    if(activeChartKey&&active.includes(activeChartKey)) openChart(activeChartKey,false);
+    else if(!activeChartKey&&active.length) openChart(active[0],false);
+  }
+
+  const hist=document.getElementById('reportHistory');
+  if(!window.reports.length){hist.innerHTML=`<div style="color:var(--text3);font-size:13px;font-weight:600;padding:10px 0">No reports recorded yet.</div>`;return;}
+  const sorted=[...window.reports].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  hist.innerHTML=sorted.map(r=>{
+    if(!r.vals)return'';
+    const valHtml=Object.keys(r.vals).map(k=>{
+      const mc=METRICS[k];if(!mc)return'';
+      const cls=getValClass(k,r.vals[k]);
+      return`<div class="re-val"><div class="rv-name">${mc.label}</div><div class="rv-num ${cls}">${r.vals[k]} <span style="font-size:9px;color:var(--text3)">${mc.unit}</span></div></div>`;
+    }).join('');
+    const ago=Math.round((Date.now()-new Date(r.date))/86400000);
+    const agoTxt=ago===0?'Today':ago===1?'Yesterday':`${ago}d ago`;
+    return`<div class="report-entry">
+      <div class="re-date-col"><div class="re-date">${fmtDate(r.date)}</div><div class="re-ago">${agoTxt}</div>${r.notes?`<div class="re-ago" style="font-style:italic;margin-top:3px">${r.notes}</div>`:''}</div>
+      <div class="re-vals">${valHtml}</div>
+      <div class="re-actions"><button class="doc-btn" onclick="deleteReport('${r._id}')">🗑</button></div>
+    </div>`;
+  }).join('');
+}
+
+function openChart(key, updateSel=true){
+  activeChartKey=key;
+  const mc=METRICS[key];
+  const pts=window.reports.filter(r=>r.vals&&r.vals[key]!=null);
+  const labels=pts.map(r=>fmtDate(r.date));
+  const data=pts.map(r=>r.vals[key]);
+  const last=pts.slice(-1)[0];
+
+  document.getElementById('chartExpTitle').textContent=mc.label;
+  document.getElementById('chartExpMeta').textContent=`${mc.unit} · Normal: ${mc.normalMin}–${mc.normalMax}${mc.highThreshold?' · High: >'+mc.highThreshold:''}`;
+  document.getElementById('chartExpanded').classList.add('open');
+
+  document.getElementById('chartRangeBar').innerHTML=`
+    <span class="crb crb-normal">Normal: ${mc.normalMin}–${mc.normalMax}</span>
+    ${mc.highThreshold?`<span class="crb crb-high">High: >${mc.highThreshold}</span>`:''}
+    ${mc.lowThreshold?`<span class="crb crb-mild">Low: <${mc.lowThreshold}</span>`:''}
+    ${last?`<span class="crb" style="background:var(--blue-dim);color:var(--blue)">Latest: ${last.vals[key]} ${mc.unit}</span>`:''}`;
+
+  if(expandedChart){expandedChart.destroy();expandedChart=null;}
+  const ctx=document.getElementById('chartExpCanvas').getContext('2d');
+  expandedChart=new Chart(ctx,{
+    type:'line',
+    data:{labels,datasets:[{
+      data,borderColor:mc.color,backgroundColor:mc.color+'18',
+      pointBackgroundColor:data.map(v=>getValClass(key,v)==='normal'?'#69D18A':getValClass(key,v)==='high'?'#FF7A8A':'#FFB347'),
+      pointBorderColor:'#0F0F14',pointBorderWidth:2,pointRadius:6,
+      borderWidth:2.5,fill:true,tension:0.35,
+    }]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{backgroundColor:'#22222E',titleColor:'#F0EEF8',bodyColor:'#9590AA',borderColor:'rgba(255,255,255,0.12)',borderWidth:1,callbacks:{label:c=>`${c.parsed.y} ${mc.unit}`}}},
+      scales:{
+        x:{grid:{color:'rgba(255,255,255,0.06)'},ticks:{color:'#5A5570',font:{size:11},maxTicksLimit:6}},
+        y:{grid:{color:'rgba(255,255,255,0.06)'},ticks:{color:'#5A5570',font:{size:11}}}
+      }
+    }
+  });
+  if(updateSel) renderReports();
+}
+
+function closeChart(){
+  activeChartKey=null;
+  document.getElementById('chartExpanded').classList.remove('open');
+  if(expandedChart){expandedChart.destroy();expandedChart=null;}
+  renderReports();
+}
+
+/* ════════════ LIGHTBOX ════════════ */
+function openLightbox(src,name){document.getElementById('lbImg').src=src;document.getElementById('lbName').textContent=name;document.getElementById('lightbox').classList.add('open');}
+function closeLightbox(){document.getElementById('lightbox').classList.remove('open');}
+
+/* ════════════ NAV ════════════ */
+const pageTitles={meds:'Medicine Stock',reports:'Lab Reports',docs:'Documents',info:'Patient Info'};
+const pageSubs={meds:'Kidney Care Centre · CKD G3B A3',reports:'Creatinine · KFT · eGFR · Blood Work',docs:'Prescriptions & Bills',info:'Dr. Ajay Goyal · Panchkula'};
+function showPage(id,el){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(t=>t.classList.remove('active'));
+  document.getElementById('page-'+id).classList.add('active');el.classList.add('active');
+  document.getElementById('topTitle').textContent=pageTitles[id]||'';
+  document.getElementById('topSub').innerHTML=(pageSubs[id]||'')+' <span class="sync-dot"></span>';
+  if(id==='docs')renderDocs();
+  if(id==='reports')renderReports();
+}
+
+/* ════════════ CLOCK ════════════ */
+function tick(){const n=new Date();document.getElementById('clock').textContent=n.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true});document.getElementById('cdate').textContent=n.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});}
+
+/* ════════════ TOAST ════════════ */
+let toastT;
+function toast(msg){const el=document.getElementById('toast');el.textContent=msg;el.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove('show'),2500);}
+
+/* ════════════ INIT ════════════ */
+tick(); setInterval(tick,1000);
+// Initial render with empty stock (Firebase will fill in via onSnapshot)
+MEDS.forEach(m=>{ window.stock[m.id]=m.def; });
+renderPills(); renderMeds();
+</script>
+</body>
+</html>
