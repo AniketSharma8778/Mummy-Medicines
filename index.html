@@ -24,7 +24,7 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 // ── PIN ──────────────────────────────────────────────────
-const CORRECT_PIN = "2003"; // Change this to your secret PIN
+const CORRECT_PIN = "1234"; // Change this to your secret PIN
 let isUnlocked = false;
 
 window.checkPin = function() {
@@ -167,7 +167,40 @@ window.deleteDoc = function(firestoreId) {
   });
 };
 
-// Expose db for any future use
+
+// ── BLOOD PRESSURE ────────────────────────────────────────
+const bpCol = collection(db, 'mummy', 'data', 'bp');
+
+onSnapshot(query(bpCol, orderBy('datetime', 'asc')), (snap) => {
+  window.bpReadings = snap.docs.map(d => ({ ...d.data(), _id: d.id }));
+  if (document.getElementById('page-bp').classList.contains('active')) renderBp();
+});
+
+window.saveBpReading = function() {
+  requirePin(async () => {
+    const date = document.getElementById('bpDate').value;
+    const time = document.getElementById('bpTime').value;
+    const sys = parseInt(document.getElementById('bpSys').value);
+    const dia = parseInt(document.getElementById('bpDia').value);
+    const pulse = document.getElementById('bpPulse').value ? parseInt(document.getElementById('bpPulse').value) : null;
+    const note = document.getElementById('bpNote').value.trim();
+    if (!date || !time) { toast('Please enter date and time'); return; }
+    if (!sys || !dia) { toast('Please enter systolic and diastolic'); return; }
+    const datetime = date + 'T' + time;
+    await addDoc(bpCol, { date, time, datetime, sys, dia, pulse, note, ts: Date.now() });
+    closeBpModal(); toast('BP reading saved');
+  });
+};
+
+window.deleteBpReading = function(id) {
+  requirePin(async () => {
+    if (!confirm('Delete this reading?')) return;
+    await deleteDoc(doc(db, 'mummy', 'data', 'bp', id));
+    toast('Reading deleted');
+  });
+};
+
+// Expose db
 window._db = db;
 </script>
 <style>
@@ -408,6 +441,51 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Nunito',
   .doc-grid{grid-template-columns:1fr}
   .report-fields-grid{grid-template-columns:1fr}
 }
+
+/* ══ BP TRACKER ══ */
+.bp-page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px}
+.add-bp-btn{display:flex;align-items:center;gap:8px;padding:10px 18px;background:var(--rose-dim);border:1px solid rgba(255,122,138,0.3);border-radius:12px;font-size:13px;font-weight:700;color:var(--rose);cursor:pointer;transition:all 0.2s}
+.add-bp-btn:hover{background:rgba(255,122,138,0.22)}
+
+/* Month tabs */
+.bp-month-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px}
+.bp-month-tab{font-size:11px;font-weight:800;padding:6px 14px;border-radius:20px;border:1px solid var(--border2);background:var(--card2);color:var(--text2);cursor:pointer;transition:all 0.2s}
+.bp-month-tab.active{background:var(--rose-dim);color:var(--rose);border-color:rgba(255,122,138,0.35)}
+
+/* Summary cards */
+.bp-summary-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:22px}
+.bp-sum-card{background:var(--card);border-radius:14px;padding:14px 16px;border:1px solid var(--border);text-align:center}
+.bp-sum-label{font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px}
+.bp-sum-val{font-family:'Playfair Display',serif;font-size:22px;font-weight:600}
+.bp-sum-sub{font-size:10px;color:var(--text3);margin-top:3px;font-weight:600}
+
+/* Chart */
+.bp-chart-card{background:var(--card);border-radius:16px;padding:20px;border:1px solid var(--border);margin-bottom:22px}
+.bp-chart-title{font-family:'Playfair Display',serif;font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px}
+.bp-chart-sub{font-size:11px;color:var(--text3);font-weight:600;margin-bottom:16px}
+.bp-chart-wrap{position:relative;height:220px}
+
+/* Table */
+.bp-table-wrap{background:var(--card);border-radius:16px;padding:0;border:1px solid var(--border);overflow:hidden;margin-bottom:20px}
+.bp-table-head{display:grid;grid-template-columns:100px 80px 90px 90px 80px 40px;gap:0;background:var(--bg2);padding:10px 16px;border-bottom:1px solid var(--border)}
+.bp-th{font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em}
+.bp-row{display:grid;grid-template-columns:100px 80px 90px 90px 80px 40px;gap:0;padding:10px 16px;border-bottom:1px solid var(--border);align-items:center;transition:background 0.15s}
+.bp-row:last-child{border-bottom:none}
+.bp-row:hover{background:var(--card2)}
+.bp-td{font-size:12px;font-weight:600;color:var(--text2)}
+.bp-td.date{color:var(--text);font-weight:700}
+.bp-td.time-slot{font-size:10px;font-weight:800;padding:2px 8px;border-radius:10px;width:fit-content}
+.slot-morning{background:var(--amber-dim);color:var(--amber)}
+.slot-evening{background:var(--lav-dim);color:var(--lav)}
+.bp-reading{font-family:'Playfair Display',serif;font-size:14px;font-weight:600}
+.bp-reading.normal{color:var(--sage)}.bp-reading.high{color:var(--rose)}.bp-reading.elevated{color:var(--amber)}
+.bp-pulse{font-size:12px;font-weight:700}
+.bp-note-small{font-size:10px;color:var(--text3);font-style:italic;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+@media(max-width:700px){
+  .bp-table-head,.bp-row{grid-template-columns:85px 65px 80px 80px 60px 36px}
+  .bp-th,.bp-td{font-size:10px}
+}
 </style>
 </head>
 <body>
@@ -441,6 +519,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Nunito',
       <div class="nav-item active" onclick="showPage('meds',this)"><span class="ni">💊</span><span class="nl">Medicines</span></div>
       <div class="nav-item" onclick="showPage('reports',this)"><span class="ni">🔬</span><span class="nl">Reports</span></div>
       <div class="nav-item" onclick="showPage('docs',this)"><span class="ni">📄</span><span class="nl">Documents</span></div>
+      <div class="nav-item" onclick="showPage('bp',this)"><span class="ni">🩺</span><span class="nl">Blood Pressure</span></div>
       <div class="nav-item" onclick="showPage('info',this)"><span class="ni">👩‍⚕️</span><span class="nl">Info</span></div>
     </nav>
     <div class="sidebar-pills">
@@ -623,6 +702,40 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Nunito',
       <textarea class="form-textarea" id="rptNotes" placeholder="Doctor's remarks, symptoms..."></textarea>
     </div>
     <button class="save-btn" onclick="saveReport()">Save Report</button>
+  </div>
+</div>
+
+<!-- ADD BP MODAL -->
+<div class="modal-bg" id="bpModal" onclick="if(event.target===this)closeBpModal()">
+  <div class="modal" style="width:420px">
+    <div class="modal-title">Add BP Reading <button class="modal-close" onclick="closeBpModal()">✕</button></div>
+    <div class="form-group">
+      <label class="form-label">Date</label>
+      <input class="form-input" type="date" id="bpDate" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Time</label>
+      <input class="form-input" type="time" id="bpTime" />
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      <div class="form-group">
+        <label class="form-label">Systolic</label>
+        <input class="form-input" type="number" id="bpSys" placeholder="e.g. 118" min="60" max="220" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Diastolic</label>
+        <input class="form-input" type="number" id="bpDia" placeholder="e.g. 79" min="40" max="140" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Pulse</label>
+        <input class="form-input" type="number" id="bpPulse" placeholder="e.g. 72" min="30" max="200" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <input class="form-input" type="text" id="bpNote" placeholder="e.g. After medication, feeling dizzy..." />
+    </div>
+    <button class="save-btn" onclick="saveBpReading()">Save Reading</button>
   </div>
 </div>
 
@@ -909,8 +1022,8 @@ function openLightbox(src,name){document.getElementById('lbImg').src=src;documen
 function closeLightbox(){document.getElementById('lightbox').classList.remove('open');}
 
 /* ════════════ NAV ════════════ */
-const pageTitles={meds:'Medicine Stock',reports:'Lab Reports',docs:'Documents',info:'Patient Info'};
-const pageSubs={meds:'Kidney Care Centre · CKD G3B A3',reports:'Creatinine · KFT · eGFR · Blood Work',docs:'Prescriptions & Bills',info:'Dr. Ajay Goyal · Panchkula'};
+const pageTitles={meds:'Medicine Stock',reports:'Lab Reports',docs:'Documents',bp:'Blood Pressure',info:'Patient Info'};
+const pageSubs={meds:'Kidney Care Centre · CKD G3B A3',reports:'Creatinine · KFT · eGFR · Blood Work',docs:'Prescriptions & Bills',bp:'Daily readings · Morning & Evening',info:'Dr. Ajay Goyal · Panchkula'};
 function showPage(id,el){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(t=>t.classList.remove('active'));
@@ -919,6 +1032,7 @@ function showPage(id,el){
   document.getElementById('topSub').innerHTML=(pageSubs[id]||'')+' <span class="sync-dot"></span>';
   if(id==='docs')renderDocs();
   if(id==='reports')renderReports();
+  if(id==='bp')renderBp();
 }
 
 /* ════════════ CLOCK ════════════ */
@@ -927,6 +1041,196 @@ function tick(){const n=new Date();document.getElementById('clock').textContent=
 /* ════════════ TOAST ════════════ */
 let toastT;
 function toast(msg){const el=document.getElementById('toast');el.textContent=msg;el.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove('show'),2500);}
+
+
+/* ════════════ BLOOD PRESSURE ════════════ */
+window.bpReadings = [];
+let bpChart = null;
+let activeBpMonth = null;
+
+function bpClass(sys, dia) {
+  if (sys >= 130 || dia >= 80) return 'high';
+  if (sys >= 120) return 'elevated';
+  return 'normal';
+}
+
+function openBpModal() {
+  const now = new Date();
+  document.getElementById('bpDate').value = now.toISOString().split('T')[0];
+  document.getElementById('bpTime').value = now.toTimeString().slice(0,5);
+  document.getElementById('bpSys').value = '';
+  document.getElementById('bpDia').value = '';
+  document.getElementById('bpPulse').value = '';
+  document.getElementById('bpNote').value = '';
+  document.getElementById('bpModal').classList.add('open');
+}
+function closeBpModal() { document.getElementById('bpModal').classList.remove('open'); }
+
+function getMonthKey(r) { return r.date.slice(0, 7); } // "2026-05"
+function fmtMonthLabel(mk) {
+  const [y, m] = mk.split('-');
+  return new Date(y, m-1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+}
+
+function renderBp() {
+  const readings = window.bpReadings;
+
+  // Get all months sorted desc
+  const months = [...new Set(readings.map(getMonthKey))].sort((a,b) => b.localeCompare(a));
+  if (!months.length) {
+    document.getElementById('bpMonthTabs').innerHTML = '';
+    document.getElementById('bpSummary').innerHTML = '';
+    document.getElementById('bpTableBody').innerHTML = `<div style="padding:40px;text-align:center;color:var(--text3);font-weight:600;font-size:13px">No BP readings yet.<br>Click "+ Add Reading" to start.</div>`;
+    if (bpChart) { bpChart.destroy(); bpChart = null; }
+    return;
+  }
+
+  // Set active month
+  if (!activeBpMonth || !months.includes(activeBpMonth)) activeBpMonth = months[0];
+
+  // Month tabs
+  document.getElementById('bpMonthTabs').innerHTML = months.map(mk =>
+    `<button class="bp-month-tab${activeBpMonth === mk ? ' active' : ''}" onclick="setBpMonth('${mk}')">${fmtMonthLabel(mk)}</button>`
+  ).join('');
+
+  // Filter readings for active month
+  const monthReadings = readings.filter(r => getMonthKey(r) === activeBpMonth)
+    .sort((a,b) => a.datetime.localeCompare(b.datetime));
+
+  // Summary stats
+  if (monthReadings.length) {
+    const avgSys = Math.round(monthReadings.reduce((s,r)=>s+r.sys,0)/monthReadings.length);
+    const avgDia = Math.round(monthReadings.reduce((s,r)=>s+r.dia,0)/monthReadings.length);
+    const maxSys = Math.max(...monthReadings.map(r=>r.sys));
+    const minSys = Math.min(...monthReadings.map(r=>r.sys));
+    const highCount = monthReadings.filter(r=>bpClass(r.sys,r.dia)==='high').length;
+    const pulseReadings = monthReadings.filter(r=>r.pulse);
+    const avgPulse = pulseReadings.length ? Math.round(pulseReadings.reduce((s,r)=>s+r.pulse,0)/pulseReadings.length) : null;
+    const avgCls = bpClass(avgSys, avgDia);
+    const avgColor = avgCls==='high'?'var(--rose)':avgCls==='elevated'?'var(--amber)':'var(--sage)';
+
+    document.getElementById('bpSummary').innerHTML = `
+      <div class="bp-sum-card">
+        <div class="bp-sum-label">Avg BP</div>
+        <div class="bp-sum-val" style="color:${avgColor}">${avgSys}/${avgDia}</div>
+        <div class="bp-sum-sub">mmHg · ${monthReadings.length} readings</div>
+      </div>
+      <div class="bp-sum-card">
+        <div class="bp-sum-label">Highest Sys</div>
+        <div class="bp-sum-val" style="color:var(--rose)">${maxSys}</div>
+        <div class="bp-sum-sub">mmHg systolic</div>
+      </div>
+      <div class="bp-sum-card">
+        <div class="bp-sum-label">Lowest Sys</div>
+        <div class="bp-sum-val" style="color:var(--sage)">${minSys}</div>
+        <div class="bp-sum-sub">mmHg systolic</div>
+      </div>
+      ${avgPulse ? `<div class="bp-sum-card"><div class="bp-sum-label">Avg Pulse</div><div class="bp-sum-val" style="color:var(--blue)">${avgPulse}</div><div class="bp-sum-sub">bpm</div></div>` : ''}
+      <div class="bp-sum-card">
+        <div class="bp-sum-label">High Readings</div>
+        <div class="bp-sum-val" style="color:${highCount>0?'var(--rose)':'var(--sage)'}">${highCount}</div>
+        <div class="bp-sum-sub">of ${monthReadings.length} total</div>
+      </div>`;
+  } else {
+    document.getElementById('bpSummary').innerHTML = '';
+  }
+
+  // Chart — show ALL readings for context, highlight active month
+  const chartReadings = readings.slice(-60); // last 60 readings max
+  const labels = chartReadings.map(r => {
+    const d = new Date(r.datetime);
+    return d.toLocaleDateString('en-IN',{day:'numeric',month:'short'}) + ' ' + r.time;
+  });
+  const sysData = chartReadings.map(r => r.sys);
+  const diaData = chartReadings.map(r => r.dia);
+
+  if (bpChart) { bpChart.destroy(); bpChart = null; }
+  const ctx = document.getElementById('bpChartCanvas').getContext('2d');
+  bpChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Systolic',
+          data: sysData,
+          borderColor: '#FF7A8A',
+          backgroundColor: 'rgba(255,122,138,0.08)',
+          pointBackgroundColor: sysData.map(v => v>=130?'#FF4466':v>=120?'#FFB347':'#69D18A'),
+          pointBorderColor: '#0F0F14',
+          pointBorderWidth: 2,
+          pointRadius: 5,
+          borderWidth: 2.5,
+          fill: true,
+          tension: 0.35,
+        },
+        {
+          label: 'Diastolic',
+          data: diaData,
+          borderColor: '#B39DDB',
+          backgroundColor: 'rgba(179,157,219,0.06)',
+          pointBackgroundColor: diaData.map(v => v>=80?'#FF4466':'#69D18A'),
+          pointBorderColor: '#0F0F14',
+          pointBorderWidth: 2,
+          pointRadius: 5,
+          borderWidth: 2,
+          fill: true,
+          tension: 0.35,
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, labels: { color: '#9590AA', font: { size: 11, family: 'Nunito' }, boxWidth: 12 } },
+        tooltip: {
+          backgroundColor: '#22222E', titleColor: '#F0EEF8', bodyColor: '#9590AA',
+          borderColor: 'rgba(255,255,255,0.12)', borderWidth: 1,
+          callbacks: {
+            afterBody: (items) => {
+              const idx = items[0].dataIndex;
+              const r = chartReadings[idx];
+              const lines = [`${r.sys}/${r.dia} mmHg`];
+              if (r.pulse) lines.push(`Pulse: ${r.pulse} bpm`);
+              if (r.note) lines.push(`Note: ${r.note}`);
+              return lines;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'#5A5570',font:{size:9},maxTicksLimit:10,maxRotation:45} },
+        y: { grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'#5A5570',font:{size:11}}, min:50 }
+      }
+    }
+  });
+
+  // Table — show month readings, newest first
+  const sorted = [...monthReadings].reverse();
+  if (!sorted.length) {
+    document.getElementById('bpTableBody').innerHTML = `<div style="padding:30px;text-align:center;color:var(--text3);font-size:13px;font-weight:600">No readings for this month.</div>`;
+    return;
+  }
+  document.getElementById('bpTableBody').innerHTML = sorted.map(r => {
+    const cls = bpClass(r.sys, r.dia);
+    const timeHour = parseInt(r.time.split(':')[0]);
+    const slotLabel = timeHour < 13 ? 'Morning' : 'Evening';
+    const slotClass = timeHour < 13 ? 'slot-morning' : 'slot-evening';
+    return `<div class="bp-row">
+      <div class="bp-td date">${fmtDate(r.date)}</div>
+      <div class="bp-td"><span class="bp-td time-slot ${slotClass}">${r.time} ${slotLabel}</span></div>
+      <div class="bp-td"><span class="bp-reading ${cls}">${r.sys}</span></div>
+      <div class="bp-td"><span class="bp-reading ${cls}">${r.dia}</span></div>
+      <div class="bp-td bp-pulse" style="color:var(--blue)">${r.pulse || '—'}</div>
+      <div class="bp-td"><button class="doc-btn" onclick="deleteBpReading('${r._id}')">🗑</button></div>
+    </div>`;
+  }).join('');
+}
+
+function setBpMonth(mk) {
+  activeBpMonth = mk;
+  renderBp();
+}
 
 /* ════════════ INIT ════════════ */
 tick(); setInterval(tick,1000);
