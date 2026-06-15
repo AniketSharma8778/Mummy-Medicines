@@ -24,7 +24,7 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 // ── PIN ──────────────────────────────────────────────────
-const CORRECT_PIN = "4438"; // Change this to your secret PIN
+const CORRECT_PIN = "1234"; // Change this to your secret PIN
 let isUnlocked = false;
 
 window.checkPin = function() {
@@ -1233,9 +1233,8 @@ function setBpMonth(mk) {
 
 /* ════════════ INIT ════════════ */
 tick(); setInterval(tick,1000);
-// Initial render with empty stock (Firebase will fill in via onSnapshot)
-MEDS.forEach(m=>{ window.stock[m.id]=m.def; });
-renderPills(); renderMeds();
+// Show loading until Firebase fills in real stock via onSnapshot
+document.getElementById('medList').innerHTML = '<div style="padding:60px;text-align:center;color:var(--text3);font-size:13px;font-weight:700;letter-spacing:0.05em">Loading medicines…</div>';
 </script>
 </body>
 </html>
