@@ -790,7 +790,7 @@ window.pendingImg = '';
 
 /* ════════════ REFILL CALC ════════════ */
 function calcDaysLeft(id){const m=MEDS.find(x=>x.id===id);return Math.floor((window.stock[id]||0)/m.tabletsPerDay);}
-function calcRefillStr(id){const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()+calcDaysLeft(id));return d.toISOString().split('T')[0];}
+function calcRefillStr(id){const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()+calcDaysLeft(id));const yyyy=d.getFullYear();const mm=String(d.getMonth()+1).padStart(2,'0');const dd=String(d.getDate()).padStart(2,'0');return `${yyyy}-${mm}-${dd}`;}
 function fmtDate(ds){return new Date(ds).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});}
 function daysTagFromCount(d){
   if(d<=0)return`<span class="days-tag dt-danger">Out of stock!</span>`;
